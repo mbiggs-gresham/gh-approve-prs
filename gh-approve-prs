@@ -1,35 +1,136 @@
 #!/usr/bin/env bash
-set -e
 
-echo "Hello gh-approve-prs!"
+set -euo pipefail
 
-# Snippets to help get started:
+help() {
+	cat << EOF
 
-# Determine if an executable is in the PATH
-# if ! type -p ruby >/dev/null; then
-#   echo "Ruby not found on the system" >&2
-#   exit 1
-# fi
+Usage: gh approve-prs --query "QUERY"
+	Approve and merge multiple PRs into one.
 
-# Pass arguments through to another command
-# gh issue list "$@" -R cli/cli
+	Required arguments:
+		--query "QUERY"
+				sets the query used to find PRs to approve.
+				e.g. --query "author:app/dependabot"
+				to approve Dependabot PRs
+	Optional arguments:
+		--selected-pr-numbers COMMA,SEPARATED,LIST
+				if set, will only work on PRs with the selected numbers.
+				e.g. --selected-pr-numbers 42,13,78
+				Defaults to selecting every PR matching the QUERY
+		--limit LIMIT
+				sets the maximum number of PRs that will be approved.
+				Defaults to 50
+		--skip-pr-check
+				if set, will approve matching PRs even if they are not passing checks.
+				Defaults to false when not specified
+    --skip-approve
+        if set, will not approve the PR. (Useful for merging only)
+        Defaults to false when not specified
+    --skip-merge
+        if set, will not merge the PR. (Useful for approving only)
+        Defaults to false when not specified
+EOF
+}
 
-# Using the gh api command to retrieve and format information
-# QUERY='
-#   query($endCursor: String) {
-#     viewer {
-#       repositories(first: 100, after: $endCursor) {
-#         nodes {
-#           nameWithOwner
-#           stargazerCount
-#         }
-#       }
-#     }
-#   }
-# '
-# TEMPLATE='
-#   {{- range $repo := .data.viewer.repositories.nodes -}}
-#     {{- printf "name: %s - stargazers: %v\n" $repo.nameWithOwner $repo.stargazerCount -}}
-#   {{- end -}}
-# '
-# exec gh api graphql -f query="${QUERY}" --paginate --template="${TEMPLATE}"
+confirm() {
+	while read -r -n1 key; do
+		if [[ $key == $'\e' ]]; then
+			exit 0
+		else
+			break
+		fi
+	done
+}
+
+LIMIT=50
+QUERY=""
+SKIP_PR_CHECK="false"
+SKIP_APPROVE="false"
+SKIP_MERGE="false"
+SELECTED_PR_NUMBERS=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h|--help)
+		help
+		exit 0
+		;;
+	--selected-pr-numbers)
+		shift
+		SELECTED_PR_NUMBERS=$1
+		;;
+	--limit)
+		shift
+		LIMIT=$1
+		;;
+	--query)
+		shift
+		QUERY=$1
+		;;
+	--skip-pr-check)
+		SKIP_PR_CHECK="true"
+		;;
+	--skip-approve)
+		SKIP_APPROVE="true"
+		;;
+	--skip-merge)
+		SKIP_MERGE="true"
+		;;
+	*)
+		help >&2
+		exit 1
+		;;
+	esac
+	shift
+done
+
+DEFAULT_BRANCH=$(gh api /repos/:owner/:repo --jq '.default_branch')
+
+if [[ -z "${QUERY}" ]]; then
+	help
+	echo "Error: --query is required; e.g. --query \"author:app/dependabot\""
+	exit 1
+fi
+
+echo "The following PRs will be evaluated for inclusion:"
+gh pr list --search "${QUERY}" --limit "${LIMIT}"
+if [[ "${SKIP_PR_CHECK}" == "true" ]]; then
+	echo -e "\nAction status checks for PRs will be skipped"
+fi
+if [[ "${SKIP_APPROVE}" == "true" ]]; then
+	echo -e "\nPR's will not be approved"
+fi
+if [[ "${SKIP_MERGE}" == "true" ]]; then
+	echo -e "\nPR's will not be merged"
+fi
+JQ_FILTER=".[]"
+if [[ -n "${SELECTED_PR_NUMBERS}" ]]; then
+	echo -e "\nOnly the following PRs will be selected: $SELECTED_PR_NUMBERS"
+	JQ_FILTER="$JQ_FILTER | select(.number == ($SELECTED_PR_NUMBERS))"
+fi
+echo "Press any key to continue or escape to abort"
+confirm
+
+count=0
+gh pr list --search "${QUERY}" --limit "${LIMIT}" --json number,url,title | jq -r "$JQ_FILTER | [.number,.url,.title] | @tsv" | while read -r NUMBER URL TITLE
+do
+	if [[ "${SKIP_PR_CHECK}" == "false" ]] && [[ $(gh pr checks "$NUMBER" | cut -d$'\t' -f2 | grep -E "fail|pending" -c) -gt 0 ]]; then
+		echo "Not all checks are passing - skipping PR #$NUMBER"
+		continue
+	fi
+  if [[ "${SKIP_APPROVE}" == "false" ]]; then
+    echo -e "\nApproving PR: '$TITLE'"
+    gh pr review --approve "$URL"
+  fi
+  if [[ "${SKIP_MERGE}" == "false" ]]; then
+    echo -e "\nMerging PR: '$TITLE'"
+    gh pr merge --auto --merge "$URL"
+  fi
+	((count=count+1))
+	if [[ $count == "$LIMIT" ]]; then
+		echo "Hit limit of $LIMIT - no more PRs will be added"
+		break
+	fi
+done
+
+echo "Finished."
