@@ -24,12 +24,12 @@ Usage: gh approve-prs --query "QUERY"
 		--skip-pr-check
 				if set, will approve matching PRs even if they are not passing checks.
 				Defaults to false when not specified
-    --skip-approve
-        if set, will not approve the PR. (Useful for merging only)
-        Defaults to false when not specified
-    --skip-merge
-        if set, will not merge the PR. (Useful for approving only)
-        Defaults to false when not specified
+		--skip-approve
+				if set, will not approve the PR. (Useful for merging only)
+				Defaults to false when not specified
+		--skip-merge
+				if set, will not merge the PR. (Useful for approving only)
+				Defaults to false when not specified
 EOF
 }
 
