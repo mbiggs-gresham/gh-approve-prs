@@ -54,4 +54,6 @@ gh approve-prs --query "QUERY"
 
 ## License
 
+Based on the work https://github.com/rnorth/gh-combine-prs/
+
 See [LICENSE](./LICENSE)
